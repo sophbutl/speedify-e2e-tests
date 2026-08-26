@@ -7,6 +7,10 @@ from typing import Any
 
 CLI_PATH = "/Applications/Speedify.app/Contents/Resources/speedify_cli"
 
+# The daemon's "not connected" state is reported as LOGGED_IN, not a literal
+# "DISCONNECTED" state string (verified against the real CLI output).
+NOT_CONNECTED_STATE = "LOGGED_IN"
+
 
 def run_cli(args: list[str]) -> Any:
     """Runs a speedify_cli subcommand and parses its JSON stdout.

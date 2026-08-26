@@ -7,60 +7,23 @@ or interaction bugs that Chromium wouldn't surface.
 import pytest
 from playwright.sync_api import Browser, Page, Playwright, expect
 
-from helpers.speedify_cli import connect, disconnect, get_adapters, get_state, wait_for_state
-
-NOT_CONNECTED_STATE = "LOGGED_IN"
-NAV_TABS = ["Networks", "Traffic", "Latency", "Loss", "Local"]
-
-TOGGLE = "#navbar-onoff"
-ONOFF = "#onOff"
-STATUS_TEXT = "#status-box-ServerButtonTextStatus"
+from helpers.speedify_cli import get_adapters, get_state
+from helpers.ui_helpers import (
+    NAV_TABS,
+    ONOFF,
+    STATUS_TEXT,
+    TOGGLE,
+    close_settings,
+    connect_and_wait,
+    disconnect_and_wait,
+    ensure_connected,
+    goto_dashboard,
+    is_nav_tab_active,
+    open_settings,
+    wait_for_connection_settle,
+)
 
 CLICK_TIMEOUT = 5000
-
-
-def _is_nav_tab_active(tab) -> bool:
-    cls = tab.get_attribute("class") or ""
-    return "darkText" in cls and "darkText40" not in cls
-
-
-def _settle(page: Page, timeout_ms: int = 20_000):
-    """Polls until the status text reaches a terminal Connected/Disconnected state.
-
-    Mirrors the helper in test_state_consistency.py / test_connect_disconnect_edge_cases.py:
-    the "pending" class alone isn't a reliable settle signal, so poll the text instead.
-    """
-    status = page.locator(STATUS_TEXT)
-    onoff = page.locator(ONOFF).first
-    waited = 0
-    last_text = ""
-    last_cls: list[str] = []
-
-    page.wait_for_timeout(150)
-    waited += 150
-
-    while waited < timeout_ms:
-        last_cls = (onoff.get_attribute("class") or "").split()
-        last_text = status.inner_text().strip()
-        if last_text in ("Connected", "Disconnected") and "pending" not in last_cls:
-            return last_cls, last_text
-        page.wait_for_timeout(300)
-        waited += 300
-    raise AssertionError(
-        f"UI never reached a stable terminal state, last class={last_cls} text={last_text!r}"
-    )
-
-
-@pytest.fixture(autouse=True)
-def restore_connection():
-    was_connected = get_state() == "CONNECTED"
-    yield
-    if was_connected and get_state() != "CONNECTED":
-        connect()
-        wait_for_state("CONNECTED", timeout=30)
-    elif not was_connected and get_state() == "CONNECTED":
-        disconnect()
-        wait_for_state(NOT_CONNECTED_STATE, timeout=10)
 
 
 def _one_pane_background(page: Page) -> str:
@@ -74,19 +37,14 @@ def _one_pane_background(page: Page) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Verify the core dashboard UI (heading, status, nav, graph, adapter, stats, toggle) renders correctly in WebKit
 def test_core_ui_renders_correctly_in_webkit(playwright: Playwright):
-    """Runs the same core checks as test_basics.py, but against a real WebKit
-    browser instead of Chromium — this is the engine the shipped app actually uses.
-    """
-    if get_state() != "CONNECTED":
-        connect()
-        wait_for_state("CONNECTED", timeout=30)
+    ensure_connected()
 
     browser = playwright.webkit.launch()
     try:
         page = browser.new_page()
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector("#networksSlider", timeout=15_000)
+        goto_dashboard(page, url="http://localhost:8080/", timeout=15_000)
 
         print("\n[webkit] heading visible:", page.get_by_role("heading", name="Speedify").count() > 0)
         expect(page.get_by_role("heading", name="Speedify")).to_be_visible()
@@ -125,14 +83,14 @@ def test_core_ui_renders_correctly_in_webkit(playwright: Playwright):
         onoff = page.locator(ONOFF).first
         class_before = onoff.get_attribute("class")
         toggle.click(timeout=CLICK_TIMEOUT)
-        _, text_after = _settle(page)
+        _, text_after = wait_for_connection_settle(page)
         class_after = onoff.get_attribute("class")
         print(f"[webkit] toggle: before={class_before!r} after={class_after!r} status={text_after!r}")
         assert class_after != class_before, "Toggle did not change state in WebKit"
 
         # Restore for the next test / teardown.
         toggle.click(timeout=CLICK_TIMEOUT)
-        _settle(page)
+        wait_for_connection_settle(page)
     finally:
         browser.close()
 
@@ -142,29 +100,23 @@ def test_core_ui_renders_correctly_in_webkit(playwright: Playwright):
 # ---------------------------------------------------------------------------
 
 
-def test_settings_drop_bug_with_reduced_motion(browser: Browser):
-    """Bug 1 (from test_stress.py::test_rapid_settings_toggle): rapid settings
-    open/close can drop a click so the panel silently fails to open. Check whether
-    macOS "Reduce motion" (which shortens/removes the settings-panel animation)
-    changes that.
-    """
+# Verify the Settings-drop bug (Bug 1) with macOS "Reduce motion" enabled
+def test_settings_reopen_with_reduced_motion_stays_recoverable(browser: Browser):
     ctx = browser.new_context()
     try:
         page = ctx.new_page()
         page.emulate_media(reduced_motion="reduce")
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector('button[aria-label="Settings Button"]')
+        goto_dashboard(page, wait_for='button[aria-label="Settings Button"]', url="http://localhost:8080/")
 
-        settings_btn = page.locator('button[aria-label="Settings Button"]')
         back_btn = page.locator("app-back-done-button")
 
-        settings_btn.click(timeout=CLICK_TIMEOUT)
+        open_settings(page, timeout=CLICK_TIMEOUT)
         page.wait_for_timeout(100)
-        back_btn.click(timeout=CLICK_TIMEOUT)
+        close_settings(page, timeout=CLICK_TIMEOUT)
         page.wait_for_timeout(100)
 
         print("\n[reduced-motion] reopening Settings immediately after close")
-        settings_btn.click(timeout=CLICK_TIMEOUT)
+        open_settings(page, timeout=CLICK_TIMEOUT)
         dropped = back_btn.count() == 0
         print(f"[reduced-motion] Settings panel dropped on immediate reopen: {dropped}")
 
@@ -172,25 +124,20 @@ def test_settings_drop_bug_with_reduced_motion(browser: Browser):
             print("[reduced-motion] Bug 1 STILL reproduces with reduced motion on")
         else:
             print("[reduced-motion] Bug 1 did not reproduce this time with reduced motion on")
-            back_btn.click(timeout=CLICK_TIMEOUT)
+            close_settings(page, timeout=CLICK_TIMEOUT)
 
         expect(page.locator("#networksSlider")).to_be_visible()
     finally:
         ctx.close()
 
 
-def test_toggle_unresponsive_bug_with_reduced_motion(browser: Browser):
-    """Bug 2 (from test_stress.py::test_rapid_connect_disconnect / the "pending"
-    stuck-state behavior in test_connect_disconnect_edge_cases.py): rapid toggling
-    can leave the connect/disconnect switch stuck unresponsive. Check whether
-    reduced motion changes that.
-    """
+# Verify the toggle-unresponsive bug (Bug 2) with macOS "Reduce motion" enabled
+def test_toggle_does_not_stay_stuck_pending_with_reduced_motion(browser: Browser):
     ctx = browser.new_context()
     try:
         page = ctx.new_page()
         page.emulate_media(reduced_motion="reduce")
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector(TOGGLE)
+        goto_dashboard(page, wait_for=TOGGLE, url="http://localhost:8080/")
 
         toggle = page.locator(TOGGLE)
         onoff = page.locator(ONOFF).first
@@ -220,17 +167,16 @@ def test_toggle_unresponsive_bug_with_reduced_motion(browser: Browser):
     finally:
         ctx.close()
         if get_state() != "CONNECTED":
-            connect()
-            wait_for_state("CONNECTED", timeout=30)
+            connect_and_wait()
 
 
-def test_rapid_tab_switching_with_reduced_motion(browser: Browser):
+# Verify rapid tab switching with macOS "Reduce motion" enabled does not swallow clicks
+def test_rapid_tab_switching_with_reduced_motion_does_not_swallow_clicks(browser: Browser):
     ctx = browser.new_context()
     try:
         page = ctx.new_page()
         page.emulate_media(reduced_motion="reduce")
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector("#networksSlider")
+        goto_dashboard(page, url="http://localhost:8080/")
 
         nav = page.locator("#networksSlider")
         tabs = {name: nav.get_by_text(name, exact=True) for name in NAV_TABS}
@@ -241,7 +187,7 @@ def test_rapid_tab_switching_with_reduced_motion(browser: Browser):
             for name in NAV_TABS:
                 tabs[name].click(timeout=CLICK_TIMEOUT)
                 page.wait_for_timeout(150)
-                if not _is_nav_tab_active(tabs[name]):
+                if not is_nav_tab_active(tabs[name]):
                     swallowed.append((cycle + 1, name))
             print(f"[reduced-motion] cycle {cycle + 1}/5 complete")
 
@@ -258,12 +204,12 @@ def test_rapid_tab_switching_with_reduced_motion(browser: Browser):
 # ---------------------------------------------------------------------------
 
 
+# Verify the UI shows one adapter card per adapter reported by the CLI, with matching names
 def test_ui_adapter_cards_match_cli_adapters(page: Page):
     adapters = get_adapters()
     assert len(adapters) >= 1, "No adapters reported by the CLI to check against"
 
-    page.goto("/")
-    page.wait_for_selector('[id^="network-dot-"]')
+    goto_dashboard(page, wait_for='[id^="network-dot-"]')
 
     ui_card_count = page.locator('[id^="network-dot-"]').count()
     print(f"\n[adapters] CLI reports {len(adapters)} adapter(s), UI shows {ui_card_count} card(s)")
@@ -278,11 +224,11 @@ def test_ui_adapter_cards_match_cli_adapters(page: Page):
         print(f"[adapters] verified card for {adapter['adapterID']} ({adapter['name']})")
 
 
-def test_adapter_card_updates_on_disconnect_and_reconnect(page: Page):
-    connect()
-    wait_for_state("CONNECTED", timeout=30)
+# Verify the adapter card returns to its original connected-state class after disconnect/reconnect
+def test_adapter_card_returns_to_connected_class_after_disconnect_and_reconnect(page: Page):
+    connect_and_wait()
 
-    page.goto("/")
+    goto_dashboard(page)
     adapters = get_adapters()
     adapter_id = adapters[0]["adapterID"]
     card = page.locator(f"#network-dot-{adapter_id}")
@@ -291,15 +237,13 @@ def test_adapter_card_updates_on_disconnect_and_reconnect(page: Page):
     class_connected = card.get_attribute("class")
     print(f"\n[adapters] card class while connected: {class_connected!r}")
 
-    disconnect()
-    wait_for_state(NOT_CONNECTED_STATE, timeout=10)
+    disconnect_and_wait()
     page.wait_for_timeout(1000)
 
     class_disconnected = card.get_attribute("class")
     print(f"[adapters] card class while disconnected: {class_disconnected!r}")
 
-    connect()
-    wait_for_state("CONNECTED", timeout=30)
+    connect_and_wait()
     page.wait_for_timeout(1000)
 
     class_reconnected = card.get_attribute("class")
@@ -317,12 +261,11 @@ def test_adapter_card_updates_on_disconnect_and_reconnect(page: Page):
 # ---------------------------------------------------------------------------
 
 
+# Verify reloading the page while disconnected still shows the correct disconnected state
 def test_reload_while_disconnected_shows_correct_state(page: Page):
-    disconnect()
-    wait_for_state(NOT_CONNECTED_STATE, timeout=10)
+    disconnect_and_wait()
 
-    page.goto("/")
-    page.wait_for_selector(STATUS_TEXT)
+    goto_dashboard(page, wait_for=STATUS_TEXT)
     expect(page.locator(STATUS_TEXT)).to_have_text("Disconnected")
 
     page.reload()
@@ -332,11 +275,11 @@ def test_reload_while_disconnected_shows_correct_state(page: Page):
     print("\n[recovery] reload while disconnected -> UI correctly shows disconnected")
 
 
+# Verify reloading the page while in Settings returns to the dashboard, not stuck in Settings
 def test_settings_reload_returns_to_dashboard_not_stuck_in_settings(page: Page):
-    page.goto("/")
-    page.wait_for_selector('button[aria-label="Settings Button"]')
+    goto_dashboard(page, wait_for='button[aria-label="Settings Button"]')
 
-    page.locator('button[aria-label="Settings Button"]').click()
+    open_settings(page)
     expect(page.locator("app-back-done-button")).to_be_visible()
 
     page.reload()
@@ -350,7 +293,7 @@ def test_settings_reload_returns_to_dashboard_not_stuck_in_settings(page: Page):
         # hash survives a reload, so the UI comes back showing Settings instead of the
         # dashboard. Recover here so later tests aren't left stuck on this panel.
         print("[recovery] FINDING: reload while in Settings does not return to the dashboard")
-        page.locator("app-back-done-button").click()
+        close_settings(page)
         page.wait_for_timeout(300)
 
     assert not stuck_in_settings, (
@@ -361,12 +304,11 @@ def test_settings_reload_returns_to_dashboard_not_stuck_in_settings(page: Page):
     expect(page.locator('button[aria-label="Settings Button"]')).to_be_visible()
 
 
+# Verify the UI stays live and responsive after 60 seconds with no interaction
 def test_ui_stays_live_after_60_seconds_of_no_interaction(page: Page):
-    connect()
-    wait_for_state("CONNECTED", timeout=30)
+    connect_and_wait()
 
-    page.goto("/")
-    page.wait_for_selector(STATUS_TEXT)
+    goto_dashboard(page, wait_for=STATUS_TEXT)
 
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -382,7 +324,7 @@ def test_ui_stays_live_after_60_seconds_of_no_interaction(page: Page):
     nav = page.locator("#networksSlider")
     nav.get_by_text("Traffic", exact=True).click(timeout=CLICK_TIMEOUT)
     page.wait_for_timeout(300)
-    assert _is_nav_tab_active(nav.get_by_text("Traffic", exact=True)), (
+    assert is_nav_tab_active(nav.get_by_text("Traffic", exact=True)), (
         "UI appears frozen/stale after 60s idle - tab click had no effect"
     )
     nav.get_by_text("Networks", exact=True).click(timeout=CLICK_TIMEOUT)
@@ -396,27 +338,26 @@ def test_ui_stays_live_after_60_seconds_of_no_interaction(page: Page):
 # ---------------------------------------------------------------------------
 
 
-def test_settings_stress_in_webkit(playwright: Playwright):
+# Verify whether the Settings-drop bug (Bug 1) reproduces under stress in WebKit
+def test_webkit_settings_stress_stays_usable_regardless_of_drops(playwright: Playwright):
     browser = playwright.webkit.launch()
     try:
         page = browser.new_page()
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector('button[aria-label="Settings Button"]')
+        goto_dashboard(page, wait_for='button[aria-label="Settings Button"]', url="http://localhost:8080/")
 
-        settings_btn = page.locator('button[aria-label="Settings Button"]')
         back_btn = page.locator("app-back-done-button")
 
         dropped_cycles = []
         print("\n[webkit-stress] settings open/close: 15 cycles at 300ms")
         for i in range(15):
-            settings_btn.click(timeout=CLICK_TIMEOUT)
+            open_settings(page, timeout=CLICK_TIMEOUT)
             page.wait_for_timeout(300)
             if back_btn.count() == 0:
                 dropped_cycles.append(i + 1)
                 print(f"[webkit-stress] cycle {i + 1}/15: Settings panel did not open")
-                settings_btn.click(timeout=CLICK_TIMEOUT)
+                open_settings(page, timeout=CLICK_TIMEOUT)
                 page.wait_for_timeout(300)
-            back_btn.click(timeout=CLICK_TIMEOUT)
+            close_settings(page, timeout=CLICK_TIMEOUT)
             page.wait_for_timeout(300)
 
         if dropped_cycles:
@@ -429,16 +370,14 @@ def test_settings_stress_in_webkit(playwright: Playwright):
         browser.close()
 
 
-def test_connect_disconnect_stress_in_webkit(playwright: Playwright):
-    if get_state() != "CONNECTED":
-        connect()
-        wait_for_state("CONNECTED", timeout=30)
+# Verify whether the toggle-unresponsive bug (Bug 2) reproduces under stress in WebKit
+def test_webkit_connect_disconnect_stress_does_not_get_stuck_pending(playwright: Playwright):
+    ensure_connected()
 
     browser = playwright.webkit.launch()
     try:
         page = browser.new_page()
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector(TOGGLE)
+        goto_dashboard(page, wait_for=TOGGLE, url="http://localhost:8080/")
 
         toggle = page.locator(TOGGLE)
         onoff = page.locator(ONOFF).first
@@ -466,8 +405,7 @@ def test_connect_disconnect_stress_in_webkit(playwright: Playwright):
     finally:
         browser.close()
         if get_state() != "CONNECTED":
-            connect()
-            wait_for_state("CONNECTED", timeout=30)
+            connect_and_wait()
 
 
 # ---------------------------------------------------------------------------
@@ -475,13 +413,13 @@ def test_connect_disconnect_stress_in_webkit(playwright: Playwright):
 # ---------------------------------------------------------------------------
 
 
+# Verify a WebKit context forced to a dark OS color scheme renders a dark background
 def test_webkit_dark_color_scheme_renders_dark_background(playwright: Playwright):
     browser = playwright.webkit.launch()
     try:
         ctx = browser.new_context(color_scheme="dark")
         page = ctx.new_page()
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector("#networksSlider")
+        goto_dashboard(page, url="http://localhost:8080/")
         page.wait_for_timeout(400)
 
         bg = _one_pane_background(page)
@@ -493,13 +431,13 @@ def test_webkit_dark_color_scheme_renders_dark_background(playwright: Playwright
         browser.close()
 
 
+# Verify a WebKit context forced to a light OS color scheme renders a light background
 def test_webkit_light_color_scheme_renders_light_background(playwright: Playwright):
     browser = playwright.webkit.launch()
     try:
         ctx = browser.new_context(color_scheme="light")
         page = ctx.new_page()
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector("#networksSlider")
+        goto_dashboard(page, url="http://localhost:8080/")
         page.wait_for_timeout(400)
 
         bg = _one_pane_background(page)
@@ -551,12 +489,12 @@ def _contrast_ratio(rgb_a: str, rgb_b: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+# Verify forced-colors (high contrast) mode does not break the dashboard layout
 def test_forced_colors_mode_does_not_break_layout(browser: Browser):
     ctx = browser.new_context(forced_colors="active")
     try:
         page = ctx.new_page()
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector("#networksSlider", timeout=15_000)
+        goto_dashboard(page, url="http://localhost:8080/", timeout=15_000)
 
         active = page.evaluate("matchMedia('(forced-colors: active)').matches")
         print(f"\n[a11y] forced-colors active: {active}")
@@ -568,13 +506,13 @@ def test_forced_colors_mode_does_not_break_layout(browser: Browser):
         ctx.close()
 
 
+# Verify the status text has sufficient color contrast against its background in both themes
 @pytest.mark.parametrize("scheme", ["dark", "light"])
 def test_status_text_and_toggle_have_sufficient_contrast(browser: Browser, scheme):
     ctx = browser.new_context(color_scheme=scheme)
     try:
         page = ctx.new_page()
-        page.goto("http://localhost:8080/")
-        page.wait_for_selector(STATUS_TEXT)
+        goto_dashboard(page, wait_for=STATUS_TEXT, url="http://localhost:8080/")
         page.wait_for_timeout(400)
 
         status_color, status_bg = _text_and_background_color(page, STATUS_TEXT)
@@ -592,18 +530,18 @@ def test_status_text_and_toggle_have_sufficient_contrast(browser: Browser, schem
         ctx.close()
 
 
+# Verify the connect/disconnect toggle is visually distinguishable in both on and off states
 def test_toggle_visually_distinguishable_in_both_states(page: Page):
     # The toggle is a sliding switch (like iOS): #onOff sets the track's background
     # color, and its child .onoffswitch-switch knob translates left/right. Position is
     # the primary, color-independent affordance, so that's the main thing checked here
     # - background-color contrast is measured too, but only as a secondary diagnostic,
     # since a colorblind user still perceives the knob position either way.
-    page.goto("/")
-    page.wait_for_selector(TOGGLE)
+    goto_dashboard(page, wait_for=TOGGLE)
     # Wait for the toggle to reach a stable Connected/Disconnected state before
     # reading its color - right after goto(), Angular can briefly show a default
     # class before applying the real connection state.
-    _settle(page)
+    wait_for_connection_settle(page)
 
     onoff = page.locator(ONOFF).first
     knob = page.locator(f"{ONOFF} .onoffswitch-switch").first
@@ -613,7 +551,7 @@ def test_toggle_visually_distinguishable_in_both_states(page: Page):
     was_connected = "on" in (onoff.get_attribute("class") or "")
 
     page.locator(TOGGLE).click(timeout=CLICK_TIMEOUT)
-    _settle(page)
+    wait_for_connection_settle(page)
     page.wait_for_timeout(500)  # let the background-color/transform CSS transition finish
     off_bg = onoff.evaluate("el => getComputedStyle(el).backgroundColor")
     off_transform = knob.evaluate("el => getComputedStyle(el).transform")
@@ -637,8 +575,6 @@ def test_toggle_visually_distinguishable_in_both_states(page: Page):
 
     # Restore original state.
     if was_connected:
-        connect()
-        wait_for_state("CONNECTED", timeout=30)
+        connect_and_wait()
     else:
-        disconnect()
-        wait_for_state(NOT_CONNECTED_STATE, timeout=10)
+        disconnect_and_wait()

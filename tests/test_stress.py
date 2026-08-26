@@ -1,15 +1,10 @@
 from playwright.sync_api import Page, expect
 
-NAV_TABS = ["Networks", "Traffic", "Latency", "Loss", "Local"]
+from helpers.ui_helpers import NAV_TABS, close_settings, goto_dashboard, is_nav_tab_active, open_settings
+
 STATS_TABS = ["Today", "Week", "Month", "All Time"]
 
 CLICK_TIMEOUT = 5000  # fail fast on a stuck UI instead of hanging on the default 30s
-
-
-def _is_nav_tab_active(tab) -> bool:
-    # Active tab class ends in "darkText"; inactive tabs end in "darkText40".
-    cls = tab.get_attribute("class") or ""
-    return "darkText" in cls and "darkText40" not in cls
 
 
 def _is_stats_tab_active(tab) -> bool:
@@ -17,9 +12,9 @@ def _is_stats_tab_active(tab) -> bool:
     return "darkText" in cls
 
 
-def test_rapid_connect_disconnect(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#navbar-onoff")
+# Verify rapid connect/disconnect clicks settle to a consistent toggle/status state
+def test_rapid_connect_disconnect_settles_to_consistent_state(page: Page):
+    goto_dashboard(page, wait_for="#navbar-onoff")
 
     toggle = page.locator("#navbar-onoff")
     onoff = page.locator("#onOff")
@@ -57,9 +52,9 @@ def test_rapid_connect_disconnect(page: Page):
     print("[stress] UI is consistent and responsive")
 
 
-def test_rapid_tab_switching(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#networksSlider")
+# Verify rapid tab switching always leaves the most recently clicked tab active
+def test_rapid_tab_switching_keeps_correct_tab_active(page: Page):
+    goto_dashboard(page)
 
     nav = page.locator("#networksSlider")
     tabs = {name: nav.get_by_text(name, exact=True) for name in NAV_TABS}
@@ -69,7 +64,7 @@ def test_rapid_tab_switching(page: Page):
         for name in NAV_TABS:
             tabs[name].click(timeout=CLICK_TIMEOUT)
             page.wait_for_timeout(200)
-            assert _is_nav_tab_active(tabs[name]), (
+            assert is_nav_tab_active(tabs[name]), (
                 f"{name} tab did not become active after click (cycle {cycle + 1})"
             )
         print(f"[stress] cycle {cycle + 1}/10 complete")
@@ -80,9 +75,9 @@ def test_rapid_tab_switching(page: Page):
     print("[stress] graph canvas still present, nav still responsive")
 
 
-def test_spam_single_tab(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#networksSlider")
+# Verify spamming clicks on a single already-active tab still renders correctly
+def test_spamming_same_tab_still_renders_correctly(page: Page):
+    goto_dashboard(page)
 
     networks_tab = page.locator("#networksSlider").get_by_text("Networks", exact=True)
 
@@ -99,9 +94,9 @@ def test_spam_single_tab(page: Page):
     print("[stress] Networks tab and graph still render after spam")
 
 
-def test_rapid_stats_tab_switching(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#statistics-pane")
+# Verify rapid stats-tab switching always leaves the most recently clicked tab active
+def test_rapid_stats_tab_switching_keeps_correct_tab_active(page: Page):
+    goto_dashboard(page, wait_for="#statistics-pane")
 
     stats = page.locator("#statistics-pane")
     tabs = {name: stats.get_by_text(name, exact=True) for name in STATS_TABS}
@@ -123,9 +118,9 @@ def test_rapid_stats_tab_switching(page: Page):
     print("[stress] statistics section still displays data")
 
 
-def test_scroll_stress(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#networksSlider")
+# Verify heavy up/down scrolling does not break or hide major dashboard sections
+def test_heavy_scrolling_does_not_break_layout(page: Page):
+    goto_dashboard(page)
 
     box = page.locator("#networksSlider").bounding_box()
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
@@ -153,22 +148,22 @@ def test_scroll_stress(page: Page):
     print("[stress] all major sections still visible after scroll stress")
 
 
-def test_rapid_settings_toggle(page: Page):
-    page.goto("/")
-    page.wait_for_selector('button[aria-label="Settings Button"]')
+# Verify rapid Settings open/close cycles don't drop clicks or leave the dashboard broken
+def test_rapid_settings_open_close_does_not_drop_clicks(page: Page):
+    goto_dashboard(page, wait_for='button[aria-label="Settings Button"]')
 
     settings_btn = page.locator('button[aria-label="Settings Button"]')
     back_btn = page.locator("app-back-done-button")
 
     print("\n[stress] rapid settings open/close: 15 cycles")
     for i in range(15):
-        settings_btn.click(timeout=CLICK_TIMEOUT)
+        open_settings(page, timeout=CLICK_TIMEOUT)
         page.wait_for_timeout(300)
         assert back_btn.count() > 0, (
             f"Settings panel did not open on cycle {i + 1}/15 - the Settings button "
             "click appears to have been dropped after rapid open/close"
         )
-        back_btn.click(timeout=CLICK_TIMEOUT)
+        close_settings(page, timeout=CLICK_TIMEOUT)
         page.wait_for_timeout(300)
         print(f"[stress] cycle {i + 1}/15 complete")
 
@@ -180,8 +175,8 @@ def test_rapid_settings_toggle(page: Page):
     expect(settings_btn).to_be_visible()
 
     print("[stress] verifying settings button still opens settings")
-    settings_btn.click(timeout=CLICK_TIMEOUT)
+    open_settings(page, timeout=CLICK_TIMEOUT)
     expect(back_btn).to_be_visible()
-    back_btn.click(timeout=CLICK_TIMEOUT)
+    close_settings(page, timeout=CLICK_TIMEOUT)
     expect(page.locator("#networksSlider")).to_be_visible()
     print("[stress] settings round-trip still works")

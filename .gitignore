@@ -1,1 +1,8 @@
 .claude/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+test-results/
+.venv/
+*.egg-info/

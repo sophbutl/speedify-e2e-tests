@@ -2,6 +2,8 @@ import re
 
 from playwright.sync_api import Page, expect
 
+from helpers.ui_helpers import NAV_TABS
+
 # Verify the Speedify UI loads and the main heading is visible
 def test_page_loads_and_shows_speedify_heading(page: Page):
     page.goto("/")
@@ -20,7 +22,7 @@ def test_all_nav_tabs_are_visible(page: Page):
     nav = page.locator("#networksSlider")
     expect(nav).to_be_visible()
 
-    for tab in ["Networks", "Traffic", "Latency", "Loss", "Local"]:
+    for tab in NAV_TABS:
         expect(nav.get_by_text(tab, exact=True)).to_be_visible()
 
 # Verify at least one network adapter card (like Wi-Fi) is showing

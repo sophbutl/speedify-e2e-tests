@@ -1,32 +1,29 @@
 from playwright.sync_api import Page, expect
 
-from helpers.speedify_cli import connect, get_adapters, get_state, wait_for_state
+from helpers.speedify_cli import get_adapters
+from helpers.ui_helpers import close_settings, ensure_connected, goto_dashboard, open_settings
 
 
+# Verify the adapter card shows the correct name and speed when connected
 def test_adapter_card_shows_name_and_speed_when_connected(page: Page):
-    if get_state() != "CONNECTED":
-        connect()
-        wait_for_state("CONNECTED", timeout=20)
+    ensure_connected(timeout=20)
 
     adapters = get_adapters()
     assert len(adapters) >= 1, "No adapters reported by the CLI to check against"
     adapter = adapters[0]
 
-    page.goto("/")
-    page.wait_for_selector(f'#network-dot-{adapter["adapterID"]}')
+    goto_dashboard(page, wait_for=f'#network-dot-{adapter["adapterID"]}')
 
     card = page.locator(f'#network-dot-{adapter["adapterID"]}')
     expect(card).to_be_visible()
     expect(card).to_contain_text(adapter["name"])
 
 
+# Verify the download and upload speed values are populated, not blank
 def test_download_and_upload_speed_values_are_not_blank(page: Page):
-    if get_state() != "CONNECTED":
-        connect()
-        wait_for_state("CONNECTED", timeout=20)
+    ensure_connected(timeout=20)
 
-    page.goto("/")
-    page.wait_for_selector('img[aria-label="Download Speed"]')
+    goto_dashboard(page, wait_for='img[aria-label="Download Speed"]')
 
     download_value = page.locator('img[aria-label="Download Speed"]').first.locator(
         "xpath=following-sibling::*[1]"
@@ -41,9 +38,9 @@ def test_download_and_upload_speed_values_are_not_blank(page: Page):
     assert upload_value.inner_text().strip() != ""
 
 
+# Verify the statistics section shows numeric values for each stat label
 def test_statistics_show_numeric_values(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#statistics-pane")
+    goto_dashboard(page, wait_for="#statistics-pane")
 
     stats = page.locator("#statistics-pane")
     for label in ["Data Encrypted", "Top Download Speed", "Top Upload Speed"]:
@@ -54,9 +51,9 @@ def test_statistics_show_numeric_values(page: Page):
         assert any(ch.isdigit() for ch in text), f"{label} value {text!r} has no digits"
 
 
+# Verify account/usage info is not blank, whether shown in the footer or Settings
 def test_footer_or_account_info_is_not_blank(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#networksSlider")
+    goto_dashboard(page)
 
     # #accountInfo-email / #accountInfo-usageText only render inside #footer, which
     # is only shown for free-tier accounts. This app is on an unlimited/team account
@@ -72,32 +69,32 @@ def test_footer_or_account_info_is_not_blank(page: Page):
         assert usage.inner_text().strip() != ""
         return
 
-    page.locator('button[aria-label="Settings Button"]').click()
+    open_settings(page)
     account_header = page.locator(".account-header").first
     expect(account_header).to_be_visible()
     text = account_header.inner_text().strip()
     print(f"[data] account type (no #footer for this account tier): {text!r}")
     assert text != ""
-    page.locator("app-back-done-button").click()
+    close_settings(page)
 
 
+# Verify the upgrade button is clickable when present, or cleanly absent otherwise
 def test_upgrade_button_is_clickable_or_absent_for_this_account_tier(page: Page):
-    page.goto("/")
-    page.wait_for_selector("#networksSlider")
+    goto_dashboard(page)
 
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
 
     upgrade_btn = page.locator("#uber-box-upgrade")
     if upgrade_btn.count() == 0:
-        # Unlimited/team accounts don't get an upgrade nag — nothing to click.
+        # Unlimited/team accounts don't get an upgrade nag - nothing to click.
         print("[data] #uber-box-upgrade not present for this account tier, skipping click")
         return
 
     expect(upgrade_btn).to_be_visible()
 
     # Upgrade CTAs commonly open an external purchase page in a new tab rather than
-    # navigating the app itself — capture a popup if one appears so it doesn't leak
+    # navigating the app itself - capture a popup if one appears so it doesn't leak
     # into later tests, and don't assume either way.
     try:
         with page.context.expect_page(timeout=3000) as popup_info:
