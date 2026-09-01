@@ -11,7 +11,7 @@ from typing import Optional
 
 from playwright.sync_api import Page
 
-from helpers.speedify_cli import NOT_CONNECTED_STATE, connect, disconnect, get_state, wait_for_state
+from helpers.speedify_cli import NOT_CONNECTED_STATE, connect, disconnect, get_state, set_mode, wait_for_state
 
 # Selectors shared across multiple test files for the connect/disconnect toggle.
 TOGGLE = "#navbar-onoff"
@@ -45,6 +45,24 @@ def disconnect_and_wait(timeout: float = 10) -> None:
     wait_for_state(NOT_CONNECTED_STATE, timeout=timeout)
 
 
+def safe_restore(*steps) -> None:
+    """Runs each zero-arg teardown callable in turn, independently of the others.
+
+    A `finally` block with several sequential restore statements is only as safe as
+    its flakiest line - if step 2 raises (a click that times out, an element that
+    isn't where a prior test left it), steps 3+ never run and whatever they were
+    supposed to restore (viewport, connection state, theme, ...) stays broken for
+    every test that follows, since `page` is shared across the whole session. Each
+    step here gets its own try/except so one failure can't block the rest; failures
+    are printed (not swallowed) so they stay visible in test output.
+    """
+    for step in steps:
+        try:
+            step()
+        except Exception as exc:
+            print(f"[restore] WARNING: a teardown step failed and was skipped: {exc}")
+
+
 def ensure_connected(timeout: float = 30) -> None:
     """Connects via the CLI only if not already connected, then waits for CONNECTED."""
     if get_state() != "CONNECTED":
@@ -57,14 +75,41 @@ def open_settings(page: Page, timeout: Optional[float] = None) -> None:
 
 
 def close_settings(page: Page, timeout: Optional[float] = None) -> None:
-    """Clicks the Back/Done button to close the Settings panel."""
-    page.locator("app-back-done-button").click(timeout=timeout)
+    """Clicks the Back/Done button to close the Settings panel (or one level of it).
+
+    Settings sub-pages stack (e.g. Settings -> Theme leaves two app-back-done-button
+    elements in the DOM at once - one per pane). .last targets the topmost pane's
+    button; an unqualified locator can resolve to a stale one from an underlying pane
+    that's visually covered and never becomes clickable, hanging until the timeout
+    (discovered via property testing - nothing else in the suite closes Settings from
+    a nested sub-page). One call pops one level; call it again to go up further.
+    """
+    page.locator("app-back-done-button").last.click(timeout=timeout)
 
 
 def is_nav_tab_active(tab) -> bool:
     """Returns whether a Networks-slider nav tab locator is in its active state."""
     cls = tab.get_attribute("class") or ""
     return "darkText" in cls and "darkText40" not in cls
+
+
+def perform_named_action(page: Page, action: str) -> None:
+    """Dispatches a property-test action by name.
+
+    Recognizes "connect", "disconnect", "toggle_ui", and "mode_<speed|streaming|redundant>"
+    - shared across the property test files so their Hypothesis-generated action
+    sequences can name a small, consistent vocabulary of state-changing moves.
+    """
+    if action == "connect":
+        connect()
+    elif action == "disconnect":
+        disconnect()
+    elif action == "toggle_ui":
+        page.locator(TOGGLE).click()
+    elif action.startswith("mode_"):
+        set_mode(action.removeprefix("mode_"))
+    else:
+        raise ValueError(f"Unrecognized action: {action!r}")
 
 
 def wait_for_connection_settle(page: Page, timeout_ms: int = 20_000):

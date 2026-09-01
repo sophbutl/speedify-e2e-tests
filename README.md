@@ -54,3 +54,6 @@ Tests run headed (not headless) since they interact with the real local VPN daem
   shortcuts, Retina scaling, trackpad scrolling, window sizes, multi-tab sync, page lifecycle.
 - `tests/test_mac_platform.py` — WebKit rendering, reduced motion, adapter changes, page
   recovery, WebKit-specific stress, forced color schemes, and accessibility contrast checks.
+- `tests/test_properties.py` — [Hypothesis](https://hypothesis.readthedocs.io/) property-based
+  tests: a layout invariant checked across randomly generated viewport sizes, and a stateful
+  test that interleaves random connect/disconnect, tab-switch, and Settings actions.
