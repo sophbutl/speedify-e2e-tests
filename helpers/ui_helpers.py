@@ -87,6 +87,17 @@ def close_settings(page: Page, timeout: Optional[float] = None) -> None:
     page.locator("app-back-done-button").last.click(timeout=timeout)
 
 
+def click_settings_row(page: Page, label: str, timeout: Optional[float] = None) -> None:
+    """Clicks a Settings row (or a Settings sub-page's choice row) by its exact text.
+
+    Uses `.last`: Settings sub-pages stack in the DOM rather than replacing the
+    previous view, and some row labels (e.g. "Bypass") also appear as headings on
+    the dashboard underneath - `.first` can silently click the wrong (non-Settings)
+    element instead of the current, topmost pane's row.
+    """
+    page.get_by_text(label, exact=True).last.click(timeout=timeout)
+
+
 def is_nav_tab_active(tab) -> bool:
     """Returns whether a Networks-slider nav tab locator is in its active state."""
     cls = tab.get_attribute("class") or ""

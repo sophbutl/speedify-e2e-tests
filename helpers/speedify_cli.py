@@ -56,6 +56,10 @@ def get_current_server() -> dict:
     return run_cli(["show", "currentserver"])
 
 
+def get_privacy() -> dict:
+    return run_cli(["show", "privacy"])
+
+
 def connect() -> dict:
     """Connects to the best server (no target = automatic best-server selection)."""
     return run_cli(["connect"])
@@ -76,6 +80,25 @@ def set_mode(mode: str) -> dict:
 
 def set_encryption(on_off: str) -> dict:
     return run_cli(["encryption", on_off])
+
+
+def set_transport_mode(mode: str) -> dict:
+    """mode is one of: auto, tcp, tcp-multi, udp, https."""
+    return run_cli(["transport", mode])
+
+
+def set_secondary_threshold(mbps: int) -> dict:
+    """Sets the Secondary Threshold (settings field: priorityOverflowThreshold), in Mbps.
+
+    Not to be confused with the CLI's separate `overflow`/overflowThreshold, which
+    controls a different threshold - verified via the UI: the Secondary Threshold
+    row's live value only ever matches priorityOverflowThreshold.
+    """
+    return run_cli(["priorityoverflow", str(mbps)])
+
+
+def set_advanced_isp_stats(on_off: str) -> dict:
+    return run_cli(["privacy", "advancedIspStats", on_off])
 
 
 def wait_for_state(target_state: str, timeout: float = 15) -> str:
