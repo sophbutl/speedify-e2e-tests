@@ -115,19 +115,25 @@ def test_interleaved_toggle_tab_and_settings_actions_stay_consistent(page: Page)
             # run and raise FlakyStrategyDefinition. Live DOM checks are fine in
             # invariants and rule bodies - they just can't gate rule *selection*.
             self.in_settings = False
+            # The nav tab bar (Networks/Traffic/.../Local) only exists in the DOM
+            # while connected - confirmed by polling for 60s with no change while
+            # disconnected, so it's not a timing issue, it's simply not rendered.
+            # Tracked the same way as in_settings (updated by the rules, checked
+            # live only once here at init) so click_tab's precondition never has
+            # to query the DOM to decide if it's enabled.
+            self.connected = get_state() == "CONNECTED"
             page.on("pageerror", lambda e: self.errors.append(str(e)))
 
         @precondition(lambda self: not self.in_settings)
         @rule()
         def click_toggle(self):
             page.locator(TOGGLE).click()
-            # Give the class/text a moment to move off any transitional "pending"
-            # state; a full wait-for-settle isn't used here since a stuck-pending
-            # UI is itself something the invariants below should be able to catch,
-            # not something this action should mask by waiting it out.
-            page.wait_for_timeout(500)
+            # Wait for a real settle (not just a fixed pause) so self.connected
+            # reflects where the daemon actually landed, not a mid-transition guess.
+            cls, _ = wait_for_connection_settle(page, timeout_ms=30_000)
+            self.connected = "on" in cls
 
-        @precondition(lambda self: not self.in_settings)
+        @precondition(lambda self: not self.in_settings and self.connected)
         @rule(tab=st.sampled_from(NAV_TABS))
         def click_tab(self, tab):
             page.locator("#networksSlider").get_by_text(tab, exact=True).click()
@@ -138,7 +144,15 @@ def test_interleaved_toggle_tab_and_settings_actions_stay_consistent(page: Page)
         def settings_open(self):
             open_settings(page)
             page.wait_for_timeout(200)
-            self.in_settings = True
+            # Bug 1 (settings-drop, documented elsewhere in this suite): a click can
+            # silently fail to open Settings. Verify it actually worked before
+            # trusting our tracked state - otherwise settings_close (gated on
+            # self.in_settings) would later wait on a back-button that was never
+            # there. A one-off DOM check inside a rule body, not a precondition, so
+            # it doesn't hit the replay-determinism issue noted above.
+            self.in_settings = page.locator("app-back-done-button").count() > 0
+            if not self.in_settings:
+                print("[property]     settings-drop (Bug 1) reproduced in the chaotic run")
 
         @precondition(lambda self: self.in_settings)
         @rule()
@@ -165,6 +179,14 @@ def test_interleaved_toggle_tab_and_settings_actions_stay_consistent(page: Page)
         @rule(choice=st.sampled_from(["Default", "Light", "Dark"]))
         def change_theme(self, choice):
             open_settings(page)
+            page.wait_for_timeout(200)
+            if page.locator("app-back-done-button").count() == 0:
+                # Bug 1 (settings-drop) dropped this open - there's no "Theme" row
+                # to click. Bail out via a fresh navigation rather than hang.
+                print("[property]     settings-drop (Bug 1) reproduced in change_theme")
+                goto_dashboard(page)
+                self.in_settings = False
+                return
             page.get_by_text("Theme", exact=True).click()
             page.locator("app-settings-choice-row").get_by_text(choice, exact=True).click()
             page.wait_for_timeout(300)
@@ -181,7 +203,11 @@ def test_interleaved_toggle_tab_and_settings_actions_stay_consistent(page: Page)
         @rule()
         def reload_page(self):
             page.reload()
-            page.wait_for_selector("#dashboard", timeout=15_000)
+            # #dashboard is a zero-height layout wrapper (attached but never
+            # "visible" - see the invariant below and the same note throughout the
+            # rest of the suite), so this must wait for "attached", not the
+            # default "visible" state, or it always times out.
+            page.wait_for_selector("#dashboard", state="attached", timeout=15_000)
             page.wait_for_timeout(300)
             # Known behavior: reloading while Settings is open keeps the app on the
             # Settings route rather than returning to the dashboard (the #/settings
@@ -431,21 +457,22 @@ def test_adapter_speed_values_never_stale_across_connection_changes(page: Page, 
             print(f"[property]   -> {action}")
             perform_named_action(page, action)
             wait_for_connection_settle(page)
-            page.wait_for_timeout(500)
 
             cli_state = get_state()
-            dl_count = page.locator('img[aria-label="Download Speed"]').count()
+            dl_locator = page.locator('img[aria-label="Download Speed"]')
             if cli_state == "CONNECTED":
-                assert dl_count > 0, "Connected, but no Download Speed indicator is present"
-                dl_value = (
-                    page.locator('img[aria-label="Download Speed"]')
-                    .first.locator("xpath=following-sibling::*[1]")
-                    .inner_text()
-                    .strip()
-                )
+                # The Download Speed indicator lags slightly behind the status
+                # text/toggle settling (confirmed: a fixed 500ms wait here is
+                # occasionally too short, a longer poll is reliably not) - wait for
+                # it directly rather than assuming a fixed pause is always enough.
+                expect(dl_locator.first).to_be_visible(timeout=5_000)
+                assert dl_locator.count() > 0, "Connected, but no Download Speed indicator is present"
+                dl_value = dl_locator.first.locator("xpath=following-sibling::*[1]").inner_text().strip()
                 print(f"[property]   download speed: {dl_value!r}")
                 assert dl_value != "", "Download speed value is blank while connected"
             else:
+                page.wait_for_timeout(500)
+                dl_count = dl_locator.count()
                 assert dl_count == 0, (
                     f"Disconnected, but a stale Download Speed indicator is still present: count={dl_count}"
                 )
@@ -494,7 +521,13 @@ def test_statistics_values_never_negative_or_nonsense(page: Page, actions):
         for action in actions:
             print(f"[property]   -> {action}")
             if action in NAV_TABS:
-                page.locator("#networksSlider").get_by_text(action, exact=True).click()
+                # The nav tab bar only renders while connected - skip gracefully
+                # rather than hang waiting for a tab that isn't there while disconnected.
+                tab_locator = page.locator("#networksSlider").get_by_text(action, exact=True)
+                if tab_locator.count() > 0:
+                    tab_locator.click()
+                else:
+                    print("[property]     nav tab bar not present (disconnected), skipping click")
             else:
                 perform_named_action(page, action)
             page.wait_for_timeout(300)
@@ -574,7 +607,15 @@ def test_dashboard_core_elements_always_attached_after_random_actions(page: Page
         for action in actions:
             print(f"[property]   -> {action}")
             if action in NAV_TABS:
-                page.locator("#networksSlider").get_by_text(action, exact=True).click()
+                # The nav tab bar only renders while connected - it's simply absent
+                # from the DOM while disconnected (not a timing issue, confirmed by
+                # polling for 60s with no change). Skip gracefully rather than hang
+                # waiting for a tab that isn't coming.
+                tab_locator = page.locator("#networksSlider").get_by_text(action, exact=True)
+                if tab_locator.count() > 0:
+                    tab_locator.click()
+                else:
+                    print("[property]     nav tab bar not present (disconnected), skipping click")
             elif action == "toggle_ui":
                 page.locator(TOGGLE).click()
             elif action == "open_settings":

@@ -19,6 +19,7 @@ from helpers.ui_helpers import (
     close_settings,
     connect_and_wait,
     disconnect_and_wait,
+    ensure_connected,
     goto_dashboard,
     is_nav_tab_active,
     open_settings,
@@ -125,7 +126,14 @@ def test_toggle_does_not_freeze_when_mixed_with_other_actions(page: Page, action
                     print("[property]     settings-drop (Bug 1) reproduced, skipping close")
             elif action.startswith("tab:"):
                 tab_name = action.split(":", 1)[1]
-                page.locator("#networksSlider").get_by_text(tab_name, exact=True).click()
+                # The nav tab bar only renders while connected - it's simply absent
+                # from the DOM while disconnected, not a timing issue (confirmed by
+                # polling for 60s with no change). Skip gracefully if it's not there.
+                tab_locator = page.locator("#networksSlider").get_by_text(tab_name, exact=True)
+                if tab_locator.count() > 0:
+                    tab_locator.click()
+                else:
+                    print("[property]     nav tab bar not present (disconnected), skipping click")
             page.wait_for_timeout(250)
 
         onoff = page.locator(ONOFF).first
@@ -234,6 +242,13 @@ def test_graph_renders_after_connect_disconnect_cycles(page: Page, num_toggles):
             toggle.click()
             page.wait_for_timeout(500)
         wait_for_connection_settle(page)
+
+        # The Networks tab (and its graph) only render while connected - the random
+        # toggle count can legitimately leave us disconnected, but this test is
+        # specifically about the graph surviving a connect/disconnect cycle, so make
+        # sure we land back on a connected, graph-showing state before checking it.
+        ensure_connected()
+        page.wait_for_timeout(500)
 
         page.locator("#networksSlider").get_by_text("Networks", exact=True).click()
         page.wait_for_timeout(400)
