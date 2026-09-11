@@ -1,0 +1,42 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: [self-hosted, macOS, speedify]
+    steps:
+      # Check out the repository
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Set up Python 3.12
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Install Python dependencies
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Install Playwright's Chromium browser
+      - name: Install Playwright Chromium
+        run: playwright install chromium
+
+      # Verify the local app is reachable before running tests
+      - name: Check app is running
+        run: curl --fail http://localhost:8080
+
+      # Run smoke tests, writing JUnit XML and failure artifacts into reports/
+      - name: Run smoke tests
+        run: pytest -m smoke --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
+
+      # Upload the reports directory regardless of test outcome
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: reports/
