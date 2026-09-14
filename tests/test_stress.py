@@ -1,6 +1,9 @@
+import pytest
 from playwright.sync_api import Page, expect
 
 from helpers.ui_helpers import NAV_TABS, close_settings, goto_dashboard, is_nav_tab_active, open_settings
+
+pytestmark = pytest.mark.slow
 
 STATS_TABS = ["Today", "Week", "Month", "All Time"]
 

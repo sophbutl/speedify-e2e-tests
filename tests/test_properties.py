@@ -14,6 +14,7 @@ action can legitimately take longer than Hypothesis's default 200ms budget.
 
 import re
 
+import pytest
 from hypothesis import HealthCheck, Phase, given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule, run_state_machine_as_test
@@ -35,6 +36,8 @@ from helpers.ui_helpers import (
     safe_restore,
     wait_for_connection_settle,
 )
+
+pytestmark = pytest.mark.slow
 
 # Hypothesis's shrink phase re-runs a failing example many times to minimize it - each
 # re-run drives the real, slow browser/daemon again, so a single failure can otherwise

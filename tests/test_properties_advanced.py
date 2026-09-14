@@ -6,6 +6,7 @@ discipline). This file covers: toggle resilience, graph/live-data rendering, lay
 and viewport edge cases, theme/display, mixed CLI+UI interaction, and page lifecycle.
 """
 
+import pytest
 from hypothesis import HealthCheck, Phase, given, settings
 from hypothesis import strategies as st
 from playwright.sync_api import Browser, Page, expect
@@ -26,6 +27,8 @@ from helpers.ui_helpers import (
     safe_restore,
     wait_for_connection_settle,
 )
+
+pytestmark = pytest.mark.slow
 
 # See test_properties.py's module docstring: skip Hypothesis's shrink/explain phases,
 # since re-running a failing example against a real, slow browser+daemon to minimize

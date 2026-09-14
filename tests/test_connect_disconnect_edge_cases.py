@@ -1,5 +1,6 @@
 import re
 
+import pytest
 from playwright.sync_api import Page, expect
 
 from helpers.speedify_cli import NOT_CONNECTED_STATE, get_current_server, get_state
@@ -49,6 +50,7 @@ def test_connect_while_already_connected_remains_stable(page: Page):
 
 
 # Verify toggling rapidly during a pending transition still settles to a consistent state
+@pytest.mark.slow
 def test_rapid_toggle_during_pending_state_settles_consistently(page: Page):
     disconnect_and_wait()
     # Give the daemon a moment to fully settle before we start clicking - starting

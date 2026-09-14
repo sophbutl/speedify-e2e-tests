@@ -2,6 +2,11 @@ name: E2E
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
 
 jobs:
   e2e:
@@ -29,9 +34,14 @@ jobs:
       - name: Check app is running
         run: curl --fail http://localhost:8080
 
-      # Run smoke tests, writing JUnit XML and failure artifacts into reports/
-      - name: Run smoke tests
-        run: pytest -m smoke --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
+      # Run the fast set (smoke included) on push, or the full suite on manual dispatch, writing JUnit XML and failure artifacts into reports/
+      - name: Run tests
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            pytest -m "not slow" --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
+          else
+            pytest --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
+          fi
 
       # Upload the reports directory regardless of test outcome
       - name: Upload reports

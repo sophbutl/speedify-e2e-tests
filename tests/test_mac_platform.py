@@ -171,6 +171,7 @@ def test_toggle_does_not_stay_stuck_pending_with_reduced_motion(browser: Browser
 
 
 # Verify rapid tab switching with macOS "Reduce motion" enabled does not swallow clicks
+@pytest.mark.slow
 def test_rapid_tab_switching_with_reduced_motion_does_not_swallow_clicks(browser: Browser):
     ctx = browser.new_context()
     try:
@@ -305,6 +306,7 @@ def test_settings_reload_returns_to_dashboard_not_stuck_in_settings(page: Page):
 
 
 # Verify the UI stays live and responsive after 60 seconds with no interaction
+@pytest.mark.slow
 def test_ui_stays_live_after_60_seconds_of_no_interaction(page: Page):
     connect_and_wait()
 
@@ -339,6 +341,7 @@ def test_ui_stays_live_after_60_seconds_of_no_interaction(page: Page):
 
 
 # Verify whether the Settings-drop bug (Bug 1) reproduces under stress in WebKit
+@pytest.mark.slow
 def test_webkit_settings_stress_stays_usable_regardless_of_drops(playwright: Playwright):
     browser = playwright.webkit.launch()
     try:
@@ -371,6 +374,7 @@ def test_webkit_settings_stress_stays_usable_regardless_of_drops(playwright: Pla
 
 
 # Verify whether the toggle-unresponsive bug (Bug 2) reproduces under stress in WebKit
+@pytest.mark.slow
 def test_webkit_connect_disconnect_stress_does_not_get_stuck_pending(playwright: Playwright):
     ensure_connected()
 
