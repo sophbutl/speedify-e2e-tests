@@ -1,10 +1,12 @@
 import re
 
+import pytest
 from playwright.sync_api import Page, expect
 
 from helpers.ui_helpers import NAV_TABS
 
 # Verify the Speedify UI loads and the main heading is visible
+@pytest.mark.smoke
 def test_page_loads_and_shows_speedify_heading(page: Page):
     page.goto("/")
     expect(page.get_by_role("heading", name="Speedify")).to_be_visible()
