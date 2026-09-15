@@ -7,17 +7,19 @@ on:
 jobs:
   spike:
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       # Enable system-extension developer mode, then download/mount the .dmg, copy the app to /Applications, and launch it
       - name: Install and launch Speedify
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           set +e
           mkdir -p spike-logs
-          sudo systemextensionsctl developer on > spike-logs/00-developer-mode.log 2>&1
+          sudo systemextensionsctl developer on < /dev/null > spike-logs/00-developer-mode.log 2>&1
           curl -sSL -o "$RUNNER_TEMP/SpeedifyInstaller.dmg" "https://downloads.speedify.com/SpeedifyInstaller.dmg" > spike-logs/01-download.log 2>&1
           ls -la "$RUNNER_TEMP/SpeedifyInstaller.dmg" >> spike-logs/01-download.log 2>&1
-          ATTACH_OUTPUT=$(hdiutil attach "$RUNNER_TEMP/SpeedifyInstaller.dmg" -nobrowse -noautoopen 2>&1)
+          ATTACH_OUTPUT=$(hdiutil attach "$RUNNER_TEMP/SpeedifyInstaller.dmg" -nobrowse -noautoopen < /dev/null 2>&1)
           echo "$ATTACH_OUTPUT" > spike-logs/02-mount.log
           MOUNT_POINT=$(echo "$ATTACH_OUTPUT" | grep "/Volumes/" | awk -F'\t' '{print $NF}' | tail -1)
           echo "Mount point: ${MOUNT_POINT:-<not found>}" | tee -a spike-logs/02-mount.log
@@ -32,6 +34,7 @@ jobs:
       # Poll localhost:8080 every 5s for up to 90s instead of a single check, in case the daemon just needs time
       - name: Poll localhost:8080 for up to 90s
         continue-on-error: true
+        timeout-minutes: 3
         run: |
           set +e
           mkdir -p spike-logs
@@ -56,6 +59,7 @@ jobs:
       # Confirm whether the daemon itself (not just the app process) actually started
       - name: Confirm daemon process and service status
         continue-on-error: true
+        timeout-minutes: 3
         run: |
           set +e
           mkdir -p spike-logs
@@ -80,6 +84,7 @@ jobs:
       # Collect Speedify's own logs and the unified log to see why 8080 isn't listening
       - name: Collect Speedify logs
         continue-on-error: true
+        timeout-minutes: 3
         run: |
           set +e
           mkdir -p spike-logs
