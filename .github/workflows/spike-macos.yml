@@ -1,0 +1,62 @@
+name: Speedify macOS Spike
+
+on:
+  push:
+    branches: [spike-macos]
+
+jobs:
+  spike:
+    runs-on: macos-latest
+    steps:
+      # Download the official Speedify .dmg, mount it, copy the app to /Applications, and launch it once to trigger the daemon/network-extension install
+      - name: Install and launch Speedify
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p spike-logs
+          curl -sSL -o "$RUNNER_TEMP/SpeedifyInstaller.dmg" "https://downloads.speedify.com/SpeedifyInstaller.dmg" > spike-logs/01-download.log 2>&1
+          ls -la "$RUNNER_TEMP/SpeedifyInstaller.dmg" >> spike-logs/01-download.log 2>&1
+          ATTACH_OUTPUT=$(hdiutil attach "$RUNNER_TEMP/SpeedifyInstaller.dmg" -nobrowse -noautoopen 2>&1)
+          echo "$ATTACH_OUTPUT" > spike-logs/02-mount.log
+          MOUNT_POINT=$(echo "$ATTACH_OUTPUT" | grep "/Volumes/" | awk -F'\t' '{print $NF}' | tail -1)
+          echo "Mount point: ${MOUNT_POINT:-<not found>}" | tee -a spike-logs/02-mount.log
+          APP_PATH=$(find "$MOUNT_POINT" -maxdepth 1 -iname "*.app" 2>/dev/null | head -1)
+          echo "App bundle: ${APP_PATH:-<not found>}" | tee -a spike-logs/02-mount.log
+          sudo cp -R "$APP_PATH" /Applications/ > spike-logs/03-copy.log 2>&1
+          ls -la /Applications | grep -i speedify >> spike-logs/03-copy.log 2>&1
+          hdiutil detach "$MOUNT_POINT" -quiet >> spike-logs/02-mount.log 2>&1
+          open -a "/Applications/$(basename "$APP_PATH")" > spike-logs/04-launch.log 2>&1
+          echo "open exit code: $?" >> spike-logs/04-launch.log
+
+      # Wait for the daemon/extension approval flow to settle, then capture whether the daemon started and whether a system/network extension is pending approval
+      - name: Daemon and system-extension diagnostics
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p spike-logs
+          sleep 15
+          { echo "=== launchctl list | grep -i speedify ==="; launchctl list | grep -i speedify; } > spike-logs/05-launchctl.log 2>&1
+          { echo "=== systemextensionsctl list ==="; systemextensionsctl list; } > spike-logs/06-systemextensions.log 2>&1
+          { echo "=== unified log, last 5m, process contains speedify ==="; log show --predicate 'process CONTAINS[c] "speedify"' --last 5m; } > spike-logs/07-unified-log.log 2>&1
+          for f in $(find ~/Library/Logs /Library/Logs -iname "*speedify*" -type f 2>/dev/null); do
+            cp "$f" "spike-logs/$(basename "$f")" 2>/dev/null
+          done
+          cat spike-logs/05-launchctl.log spike-logs/06-systemextensions.log
+
+      # Check whether the app's local server on port 8080 responds
+      - name: Check localhost:8080
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p spike-logs
+          curl -v --max-time 10 http://localhost:8080 > spike-logs/08-curl-8080.log 2>&1
+          echo "curl exit code: $?" | tee -a spike-logs/08-curl-8080.log
+          cat spike-logs/08-curl-8080.log
+
+      # Upload every collected log so the results can be inspected without needing runner access
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-macos-logs
+          path: spike-logs/
