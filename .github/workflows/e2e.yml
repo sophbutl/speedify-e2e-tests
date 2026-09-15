@@ -28,9 +28,9 @@ jobs:
       - name: Install Playwright Chromium
         run: python3.12 -m playwright install chromium
 
-      # Verify the local app is reachable before running tests
-      - name: Check app is running
-        run: curl --fail http://localhost:8080
+      # Verify the Speedify daemon is reachable before running tests
+      - name: Check Speedify daemon is running
+        run: /Applications/Speedify.app/Contents/Resources/speedify_cli state
 
       # Run the fast set (smoke included) on push, or the full suite on manual dispatch, writing JUnit XML and failure artifacts into reports/
       - name: Run tests
