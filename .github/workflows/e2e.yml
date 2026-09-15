@@ -16,19 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Set up Python 3.12
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # Verify the pre-installed Python 3.12 toolchain is on PATH
+      - name: Verify Python
+        run: python3.12 --version
 
       # Install Python dependencies
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python3.12 -m pip install -r requirements.txt
 
       # Install Playwright's Chromium browser
       - name: Install Playwright Chromium
-        run: playwright install chromium
+        run: python3.12 -m playwright install chromium
 
       # Verify the local app is reachable before running tests
       - name: Check app is running
@@ -38,9 +36,9 @@ jobs:
       - name: Run tests
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            pytest -m "not slow" --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
+            python3.12 -m pytest -m "not slow" --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
           else
-            pytest --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
+            python3.12 -m pytest --junitxml=reports/junit.xml --screenshot=only-on-failure --video=retain-on-failure --output=reports
           fi
 
       # Upload the reports directory regardless of test outcome
