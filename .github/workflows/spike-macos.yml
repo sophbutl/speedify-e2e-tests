@@ -8,12 +8,13 @@ jobs:
   spike:
     runs-on: macos-latest
     steps:
-      # Download the official Speedify .dmg, mount it, copy the app to /Applications, and launch it once to trigger the daemon/network-extension install
+      # Enable system-extension developer mode, then download/mount the .dmg, copy the app to /Applications, and launch it
       - name: Install and launch Speedify
         continue-on-error: true
         run: |
           set +e
           mkdir -p spike-logs
+          sudo systemextensionsctl developer on > spike-logs/00-developer-mode.log 2>&1
           curl -sSL -o "$RUNNER_TEMP/SpeedifyInstaller.dmg" "https://downloads.speedify.com/SpeedifyInstaller.dmg" > spike-logs/01-download.log 2>&1
           ls -la "$RUNNER_TEMP/SpeedifyInstaller.dmg" >> spike-logs/01-download.log 2>&1
           ATTACH_OUTPUT=$(hdiutil attach "$RUNNER_TEMP/SpeedifyInstaller.dmg" -nobrowse -noautoopen 2>&1)
@@ -28,30 +29,78 @@ jobs:
           open -a "/Applications/$(basename "$APP_PATH")" > spike-logs/04-launch.log 2>&1
           echo "open exit code: $?" >> spike-logs/04-launch.log
 
-      # Wait for the daemon/extension approval flow to settle, then capture whether the daemon started and whether a system/network extension is pending approval
-      - name: Daemon and system-extension diagnostics
+      # Poll localhost:8080 every 5s for up to 90s instead of a single check, in case the daemon just needs time
+      - name: Poll localhost:8080 for up to 90s
         continue-on-error: true
         run: |
           set +e
           mkdir -p spike-logs
-          sleep 15
-          { echo "=== launchctl list | grep -i speedify ==="; launchctl list | grep -i speedify; } > spike-logs/05-launchctl.log 2>&1
-          { echo "=== systemextensionsctl list ==="; systemextensionsctl list; } > spike-logs/06-systemextensions.log 2>&1
-          { echo "=== unified log, last 5m, process contains speedify ==="; log show --predicate 'process CONTAINS[c] "speedify"' --last 5m; } > spike-logs/07-unified-log.log 2>&1
-          for f in $(find ~/Library/Logs /Library/Logs -iname "*speedify*" -type f 2>/dev/null); do
-            cp "$f" "spike-logs/$(basename "$f")" 2>/dev/null
+          : > spike-logs/09-poll-8080.log
+          RESPONDED=""
+          for i in $(seq 1 18); do
+            ELAPSED=$((i * 5))
+            RESULT=$(curl -s -o /dev/null -w "http_code=%{http_code} time_total=%{time_total}" --max-time 4 http://localhost:8080)
+            echo "attempt=$i elapsed=${ELAPSED}s $RESULT" | tee -a spike-logs/09-poll-8080.log
+            CODE=$(echo "$RESULT" | grep -o 'http_code=[0-9]*' | cut -d= -f2)
+            if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
+              echo "8080 responded on attempt $i (~${ELAPSED}s) with HTTP $CODE" | tee -a spike-logs/09-poll-8080.log
+              RESPONDED="yes"
+              break
+            fi
+            sleep 5
           done
-          cat spike-logs/05-launchctl.log spike-logs/06-systemextensions.log
+          if [ -z "$RESPONDED" ]; then
+            echo "8080 never responded within 90s" | tee -a spike-logs/09-poll-8080.log
+          fi
 
-      # Check whether the app's local server on port 8080 responds
-      - name: Check localhost:8080
+      # Confirm whether the daemon itself (not just the app process) actually started
+      - name: Confirm daemon process and service status
         continue-on-error: true
         run: |
           set +e
           mkdir -p spike-logs
-          curl -v --max-time 10 http://localhost:8080 > spike-logs/08-curl-8080.log 2>&1
-          echo "curl exit code: $?" | tee -a spike-logs/08-curl-8080.log
-          cat spike-logs/08-curl-8080.log
+          { echo "=== systemextensionsctl list (after developer mode + launch) ==="; systemextensionsctl list; } > spike-logs/10-systemextensions.log 2>&1
+          { echo "=== ps aux | grep -i speedify ==="; ps aux | grep -i speedify | grep -v grep; } > spike-logs/11-ps.log 2>&1
+          {
+            echo "=== launchctl list (user domain), speedify entries ==="
+            launchctl list | grep -i speedify
+            echo
+            echo "=== sudo launchctl list (system domain), speedify entries ==="
+            sudo launchctl list | grep -i speedify
+          } > spike-logs/12-launchctl-list.log 2>&1
+          : > spike-logs/13-launchctl-print.log
+          for label in $(launchctl list | grep -i speedify | awk '{print $3}'); do
+            { echo "=== launchctl print gui/$(id -u)/$label ==="; launchctl print "gui/$(id -u)/$label"; echo; } >> spike-logs/13-launchctl-print.log 2>&1
+          done
+          for label in $(sudo launchctl list | grep -i speedify | awk '{print $3}'); do
+            { echo "=== sudo launchctl print system/$label ==="; sudo launchctl print "system/$label"; echo; } >> spike-logs/13-launchctl-print.log 2>&1
+          done
+          cat spike-logs/10-systemextensions.log spike-logs/11-ps.log spike-logs/12-launchctl-list.log
+
+      # Collect Speedify's own logs and the unified log to see why 8080 isn't listening
+      - name: Collect Speedify logs
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p spike-logs
+          {
+            echo "=== /Library/Logs ==="
+            find /Library/Logs -iname "*peedify*" 2>/dev/null
+            echo
+            echo "=== ~/Library/Logs ==="
+            find ~/Library/Logs -iname "*peedify*" 2>/dev/null
+            echo
+            echo "=== /Library/Application Support/Speedify ==="
+            find "/Library/Application Support/Speedify" 2>/dev/null
+          } > spike-logs/14-log-locations.log 2>&1
+          i=0
+          for f in $(find /Library/Logs ~/Library/Logs -type f -iname "*peedify*" 2>/dev/null) $(find "/Library/Application Support/Speedify" -type f 2>/dev/null); do
+            i=$((i + 1))
+            cp "$f" "spike-logs/collected-log-$i-$(basename "$f")" 2>/dev/null
+          done
+          echo "Collected $i Speedify-related log file(s)" >> spike-logs/14-log-locations.log
+          log show --predicate 'process CONTAINS "peedify"' --last 5m > spike-logs/15-unified-log.log 2>&1
+          cat spike-logs/14-log-locations.log
 
       # Upload every collected log so the results can be inspected without needing runner access
       - name: Upload diagnostic logs
